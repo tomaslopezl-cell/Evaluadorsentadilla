@@ -4,7 +4,7 @@ Sistema de análisis kinemático en tiempo real para la evaluación del valgo y 
 
 ## 🔗 Enlaces del Proyecto
 * **Interfaz Web Pública (Netlify):** https://analisisentadilla.netlify.app/
-* **Repositorio de Código (GitHub):** https://github.com/tomaslopezl-cell/Evaluadorsentadilla/upload/main
+* **Repositorio de Código (GitHub):** https://github.com/tomaslopezl-cell/Evaluadorsentadilla
 ---
 
 ## 📋 Requisitos del Sistema
