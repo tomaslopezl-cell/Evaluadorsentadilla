@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Evaluación Bioinstrumental Kinésica de Sentadilla</title>
+  <!-- Carga de librerías de IA -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background-color: #121212;
+      color: white;
+      text-align: center;
+      margin: 0;
+      padding: 15px;
+    }
+    h1 { margin-bottom: 2px; font-size: 22px; }
+    p { color: #aaa; font-size: 13px; margin-top: 2px; }
+    
+    #indicador {
+      font-size: 17px;
+      font-weight: bold;
+      padding: 10px;
+      margin: 10px auto;
+      width: 95%;
+      max-width: 1050px;
+      border-radius: 8px;
+      background-color: #333;
+      transition: background-color 0.3s;
+    }
+
+    #panel-clinico {
+      background-color: #1e1e1e;
+      border-left: 5px solid #00d2ff;
+      padding: 10px 15px;
+      margin: 8px auto;
+      width: 95%;
+      max-width: 1050px;
+      border-radius: 5px;
+      text-align: left;
+      font-size: 13px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+
+    .metricas-rapidas {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 6px;
+      font-weight: bold;
+      color: #ff9200;
+    }
+
+    .tiempo-riesgo {
+      color: #ff5252;
+      font-weight: bold;
+    }
+    
+    /* LAYOUT PARALELO (SIDE BY SIDE) */
+    .main-layout {
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      align-items: stretch;
+      gap: 15px;
+      margin-top: 10px;
+      width: 95%;
+      max-width: 1050px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .box-panel {
+      flex: 1;
+      background-color: #1e1e1e;
+      border-radius: 8px;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+    }
+
+    .video-container {
+      position: relative;
+      display: inline-block;
+      width: 480px;
+      height: 360px;
+    }
+
+    video, canvas { border-radius: 8px; }
+    #canvas { position: absolute; top: 0; left: 0; }
+
+    button {
+      background-color: #007bff; color: white; border: none;
+      padding: 10px 20px; font-size: 15px; font-weight: bold;
+      border-radius: 5px; cursor: pointer; margin-top: 5px;
+    }
+    button:hover { background-color: #0056b3; }
+  </style>
+</head>
+<body>
+
+  <h1>Evaluador Bioinstrumental de Sentadilla</h1>
+  <p>Análisis Kinemático, Exposición Temporal de Riesgo y Disposición Paralela</p>
+  
+  <button id="btnCam">Iniciar Cámara Web</button>
+  
+  <!-- Semáforo de Alerta -->
+  <div id="indicador">Presiona "Iniciar Cámara Web" para comenzar el análisis</div>
+
+  <!-- Panel Diagnóstico Kinésico -->
+  <div id="panel-clinico">
+    <strong>📊 Reporte Kinésico en Tiempo Real:</strong>
+    <div id="fase-movimiento">Fase actual: Esperando inicio...</div>
+    <div id="compensacion-sugerida" style="color: #00d2ff; margin-top: 3px;">Sugerencia técnica: -</div>
+    <div class="metricas-rapidas">
+      <span id="min-izq">Mín. Izq: --°</span>
+      <span id="min-der">Mín. Der: --°</span>
+      <span id="tiempo-valgo" class="tiempo-riesgo">Tiempo en Riesgo: 0.0s</span>
+    </div>
+  </div>
+  
+  <!-- LAYOUT LADO A LADO -->
+  <div class="main-layout">
+    <!-- PANEL IZQUIERDO: CÁMARA WEB -->
+    <div class="box-panel">
+      <h4 style="margin:0 0 8px 0; color:#00d2ff;">🎥 Registro de Video y Pose</h4>
+      <div class="video-container">
+        <video id="video" width="480" height="360" autoplay playsinline style="display:none;"></video>
+        <canvas id="canvas" width="480" height="360"></canvas>
+      </div>
+    </div>
+
+    <!-- PANEL DERECHO: GRÁFICO AL LADO -->
+    <div class="box-panel">
+      <h4 style="margin:0 0 8px 0; color:#00d2ff;">📈 Cinemática Angular en Vivo (° / Tiempo)</h4>
+      <canvas id="chartCanvas" width="450" height="360"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    const chartCanvas = document.getElementById('chartCanvas');
+    const ctxChart = chartCanvas.getContext('2d');
+
+    const indicador = document.getElementById('indicador');
+    const faseDiv = document.getElementById('fase-movimiento');
+    const compDiv = document.getElementById('compensacion-sugerida');
+    const minIzqDiv = document.getElementById('min-izq');
+    const minDerDiv = document.getElementById('min-der');
+    const tiempoRiesgoDiv = document.getElementById('tiempo-valgo');
+    const btnCam = document.getElementById('btnCam');
+    
+    let detector;
+    let ultimaAlturaCadera = 0;
+    
+    // Historial para el gráfico
+    let datosIzq = [];
+    let datosDer = [];
+    const maxPuntos = 50;
+
+    // Métricas
+    let minAngIzq = 180;
+    let minAngDer = 180;
+    let framesEnRiesgo = 0; // Para calcular tiempo mantenido en alerta
+
+    btnCam.addEventListener('click', async () => {
+      btnCam.innerText = "Cargando IA...";
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 480, height: 360 } });
+      video.srcObject = stream;
+      await new Promise(r => video.onloadedmetadata = r);
+      video.play();
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      
+      detector = await poseDetection.createDetector(poseDetection.SupportedModels.MoveNet, { modelType: poseDetection.movenet.modelType.SINGLEPOSE_THUNDER });
+      btnCam.style.display = 'none';
+      detectarPose();
+    });
+
+    function calcularAngulo(p1, p2, p3) {
+      let radians = Math.atan2(p3.y - p2.y, p3.x - p2.x) - Math.atan2(p1.y - p2.y, p1.x - p2.x);
+      let angle = Math.abs((radians * 180.0) / Math.PI);
+      return angle > 180.0 ? 360 - angle : angle;
+    }
+
+    function procesarPierna(cadera, rodilla, tobillo, etiqueta) {
+      if (!cadera || !rodilla || !tobillo || cadera.score < 0.3 || rodilla.score < 0.3 || tobillo.score < 0.3) {
+        return { angulo: null, nivel: 'SEGURO', msj: '' };
+      }
+
+      const angulo = Math.round(calcularAngulo(cadera, rodilla, tobillo));
+      let color = '#00FF00'; 
+      let nivel = 'SEGURO';
+      let msj = '';
+
+      if (angulo < 150) {
+        color = '#FF0000'; nivel = 'CRITICO'; msj = `VALGO CRÍTICO (${etiqueta})`;
+      } else if (angulo < 160) {
+        color = '#FFCC00'; nivel = 'PRECAUCION'; msj = `Valgo Leve (${etiqueta})`;
+      } else if (angulo > 195) {
+        color = '#FF0000'; nivel = 'CRITICO'; msj = `VARO CRÍTICO (${etiqueta})`;
+      } else if (angulo > 185) {
+        color = '#FFCC00'; nivel = 'PRECAUCION'; msj = `Varo Leve (${etiqueta})`;
+      }
+
+      // Dibujar líneas articulares
+      ctx.beginPath();
+      ctx.moveTo(cadera.x, cadera.y); ctx.lineTo(rodilla.x, rodilla.y); ctx.lineTo(tobillo.x, tobillo.y);
+      ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.stroke();
+
+      // Dibujar puntos
+      [cadera, rodilla, tobillo].forEach(p => {
+        ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+        ctx.fillStyle = '#FFFFFF'; ctx.fill(); ctx.stroke();
+      });
+
+      // Texto de grados
+      ctx.fillStyle = color; ctx.font = 'bold 16px Arial';
+      const offsetX = etiqueta === 'Izq' ? 12 : -45;
+      ctx.fillText(`${angulo}°`, rodilla.x + offsetX, rodilla.y);
+
+      return { angulo, nivel, msj, yCadera: cadera.y };
+    }
+
+    // DIBUJO DEL GRÁFICO AL LADO
+    function dibujarGrafico() {
+      const w = chartCanvas.width;
+      const h = chartCanvas.height;
+
+      ctxChart.clearRect(0, 0, w, h);
+      ctxChart.fillStyle = "#181818";
+      ctxChart.fillRect(0, 0, w, h);
+
+      function mapY(val) {
+        return h - 35 - ((val - 120) / (185 - 120)) * (h - 55);
+      }
+
+      // Grilla y Guías
+      ctxChart.strokeStyle = "#333";
+      ctxChart.lineWidth = 1;
+      ctxChart.beginPath();
+      ctxChart.moveTo(40, mapY(160)); ctxChart.lineTo(w - 10, mapY(160));
+      ctxChart.moveTo(40, mapY(150)); ctxChart.lineTo(w - 10, mapY(150));
+      ctxChart.stroke();
+
+      // Textos de referencia
+      ctxChart.fillStyle = "#ffcc00"; ctxChart.font = "11px Arial";
+      ctxChart.fillText("160° Tol.", 2, mapY(160) + 3);
+      ctxChart.fillStyle = "#ff0000";
+      ctxChart.fillText("150° Crít.", 2, mapY(150) + 3);
+
+      // Dibujar Curvas
+      dibujarLineaHistorial(datosIzq, "#00d2ff"); // Azul Izquierda
+      dibujarLineaHistorial(datosDer, "#ff9200"); // Naranja Derecha
+
+      function dibujarLineaHistorial(datos, color) {
+        if (datos.length < 2) return;
+        ctxChart.beginPath();
+        ctxChart.strokeStyle = color;
+        ctxChart.lineWidth = 2.5;
+        const step = (w - 50) / maxPuntos;
+
+        for (let i = 0; i < datos.length; i++) {
+          const x = 45 + i * step;
+          const y = mapY(datos[i]);
+          if (i === 0) ctxChart.moveTo(x, y);
+          else ctxChart.lineTo(x, y);
+        }
+        ctxChart.stroke();
+      }
+    }
+
+    async function detectarPose() {
+      const poses = await detector.estimatePoses(video);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      if (poses.length > 0) {
+        const kp = poses[0].keypoints;
+        const resIzq = procesarPierna(kp.find(k => k.name === 'left_hip'), kp.find(k => k.name === 'left_knee'), kp.find(k => k.name === 'left_ankle'), 'Izq');
+        const resDer = procesarPierna(kp.find(k => k.name === 'right_hip'), kp.find(k => k.name === 'right_knee'), kp.find(k => k.name === 'right_ankle'), 'Der');
+
+        if (resIzq.angulo !== null || resDer.angulo !== null) {
+          
+          if (resIzq.angulo) datosIzq.push(resIzq.angulo);
+          if (resDer.angulo) datosDer.push(resDer.angulo);
+
+          if (datosIzq.length > maxPuntos) datosIzq.shift();
+          if (datosDer.length > maxPuntos) datosDer.shift();
+
+          dibujarGrafico();
+
+          // Mínimos Registrados
+          if (resIzq.angulo && resIzq.angulo < minAngIzq) {
+            minAngIzq = resIzq.angulo;
+            minIzqDiv.innerText = `Mín. Izq: ${minAngIzq}°`;
+          }
+          if (resDer.angulo && resDer.angulo < minAngDer) {
+            minAngDer = resDer.angulo;
+            minDerDiv.innerText = `Mín. Der: ${minAngDer}°`;
+          }
+
+          // FASE DE SENTADILLA
+          let caderaY = resIzq.yCadera || resDer.yCadera;
+          let fase = "Mantenimiento / De pie";
+          
+          if (caderaY - ultimaAlturaCadera > 2.0) {
+            fase = "Fase Excéntrica (Bajando)";
+          } else if (ultimaAlturaCadera - caderaY > 2.0) {
+            fase = "Fase Concéntrica (Subiendo)";
+          } else if (caderaY > 210) {
+            fase = "Punto Profundo / Mantenimiento Abajo";
+          }
+          ultimaAlturaCadera = caderaY;
+          faseDiv.innerText = `Fase actual: ${fase}`;
+
+          // CONTRACCIÓN DE TIEMPO EN RIESGO Y ALERTAS
+          if (resIzq.nivel === 'CRITICO' || resDer.nivel === 'CRITICO') {
+            framesEnRiesgo++;
+            let segundosRiesgo = (framesEnRiesgo / 15).toFixed(1); // Aprox 15 fps
+            tiempoRiesgoDiv.innerText = `⏱️️ Tiempo Mantenido en Riesgo: ${segundosRiesgo}s`;
+
+            let fallas = [resIzq.msj, resDer.msj].filter(m => m !== '').join(' | ');
+            indicador.innerText = `🚨 ALERTA CRÍTICA: ${fallas}`;
+            indicador.style.backgroundColor = '#c62828';
+
+            if (fase.includes("Excéntrica")) {
+              compDiv.innerText = "💡 Falla al bajar: Revisa movilidad de tobillo y control del glúteo medio.";
+            } else if (fase.includes("Profundo")) {
+              compDiv.innerText = "💡 Falla mantenida abajo: Déficit de torque externo de cadera en flexión sostenida.";
+            } else if (fase.includes("Concéntrica")) {
+              compDiv.innerText = "💡 Falla al subir: Fatiga del glúteo medio o dominancia del cuádriceps.";
+            }
+          } else if (resIzq.nivel === 'PRECAUCION' || resDer.nivel === 'PRECAUCION') {
+            let avisos = [resIzq.msj, resDer.msj].filter(m => m !== '').join(' | ');
+            indicador.innerText = `⚠️ RANGO PERMITIDO CON PRECAUCIÓN: ${avisos}`;
+            indicador.style.backgroundColor = '#f57f17';
+            compDiv.innerText = "💡 Colapso leve en rango tolerable. Corregir alineación.";
+          } else {
+            indicador.innerText = `✅ ALINEACIÓN FISIOLÓGICA ADECUADA (Iz: ${resIzq.angulo}° | De: ${resDer.angulo}°)`;
+            indicador.style.backgroundColor = '#2e7d32';
+            compDiv.innerText = "💡 Patrón kinemático óptimo sin desviaciones críticas.";
+          }
+        }
+      }
+      requestAnimationFrame(detectarPose);
+    }
+  </script>
+</body>
+</html>
